@@ -64,12 +64,15 @@ def set_attributes(obj, response_json):
     for key in response_json:
         if key not in ['token_type', 'id_token']:
             setattr(obj, key, response_json[key])
-    
-    if 'id_token' in response_json:
-        if response_json['id_token'] is not None:
-            is_valid = validate_id_token(response_json['id_token'], obj.client_id, obj.issuer_uri, obj.jwks_uri)
-            if is_valid:
-                obj.id_token = response_json['id_token']  
+
+    if 'id_token' in response_json and response_json['id_token'] is not None:
+        if is_valid := validate_id_token(
+            response_json['id_token'],
+            obj.client_id,
+            obj.issuer_uri,
+            obj.jwks_uri,
+        ):
+            obj.id_token = response_json['id_token']  
 
 def send_request(method, url, header, obj, body=None, session=None, oauth1_header=None):
     """Makes API request using requests library, raises `intuitlib.exceptions.AuthClientError` if request not successful and sets specified object attributes from API response if request successful
@@ -136,7 +139,7 @@ def generate_token(length=30, allowed_chars=''.join([string.ascii_letters, strin
     :return: Token string
     """
 
-    return ''.join(random.choice(allowed_chars) for i in range(length))
+    return ''.join(random.choice(allowed_chars) for _ in range(length))
 
 def validate_id_token(id_token, client_id, intuit_issuer, jwk_uri):
     """Validates ID Token returned by Intuit
@@ -156,21 +159,20 @@ def validate_id_token(id_token, client_id, intuit_issuer, jwk_uri):
     id_token_payload = json.loads(b64decode(_correct_padding(id_token_parts[1])).decode('ascii'))
     id_token_signature = urlsafe_b64decode(((_correct_padding(id_token_parts[2])).encode('ascii')))
 
-    if id_token_payload['iss'] != intuit_issuer:
+    if (
+        id_token_payload['iss'] != intuit_issuer
+        or id_token_payload['aud'][0] != client_id
+    ):
         return False
-    elif id_token_payload['aud'][0] != client_id:
-        return False
-
     current_time = (datetime.utcnow() - datetime(1970, 1, 1)).total_seconds()
     if id_token_payload['exp'] < current_time:
         return False
 
-    message = id_token_parts[0] + '.' + id_token_parts[1]
+    message = f'{id_token_parts[0]}.{id_token_parts[1]}'
     keys_dict = get_jwk(id_token_header['kid'], jwk_uri)
 
     public_key = jwk.construct(keys_dict)
-    is_signature_valid = public_key.verify(message.encode('utf-8'), id_token_signature)
-    return is_signature_valid
+    return public_key.verify(message.encode('utf-8'), id_token_signature)
 
 def get_jwk(kid, jwk_uri):
     """Get JWK for public key information
@@ -186,8 +188,7 @@ def get_jwk(kid, jwk_uri):
     if response.status_code != 200:
         raise AuthClientError(response)
     data = response.json()
-    keys = next(key for key in data["keys"] if key['kid'] == kid)
-    return keys
+    return next(key for key in data["keys"] if key['kid'] == kid)
 
 def _correct_padding(val):
     """Correct padding for JWT
